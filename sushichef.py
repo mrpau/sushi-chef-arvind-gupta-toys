@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 
+import json
 import os
-import pprint
 import requests
 import re
 import shutil
-import json
+import sys
 
 from arvind import ArvindVideo, ArvindLanguage, YOUTUBE_CACHE_DIR, YOUTUBE_ID_REGEX
 
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString
 
 from ricecooker.chefs import SushiChef
 from ricecooker.classes.files import YouTubeVideoFile
@@ -17,7 +18,6 @@ from ricecooker.classes.licenses import get_license
 from ricecooker.classes.nodes import VideoNode, TopicNode
 
 
-LE = 'Learning Equality'
 
 ARVIND = "Arvind Gupta Toys"
 
@@ -29,19 +29,33 @@ DOWNLOADS_VIDEOS_PATH = os.path.join(DOWNLOADS_PATH, "videos/")
 
 SKIP_VIDEOS_PATH = os.path.join(ROOT_DIR_PATH, "skip_videos.txt")
 
-CACHE_VIDEOS_PATH = os.path.join(ROOT_DIR_PATH, "cache_skip_videos.json")
+CACHE_SKIP_VIDEOS_PATH = os.path.join(ROOT_DIR_PATH, "cache_skip_videos.json")
 
 # These are the languages that has no sub topics on its videos.
 SINGLE_TOPIC_LANGUAGES = [
-    "bhojpuri", "nepali", "malayalam", "telugu", "bengali", \
-    "odiya", "punjabi", "marwari", "assamese", "urdu", \
-     "spanish", "chinese", "indonesian", "sci_edu", "science/educational"
-    ]
+    "bhojpuri; bajpuri; bhojapuri",  # actual lang_obj.name in le-utils
+    "bhojpuri",                      # future-proofing for upcoming lang_obj.name changes
+    "nepali",
+    "malayalam",
+    "telugu",
+    "bengali",
+    "odiya",
+    "punjabi",
+    "marwari; marwadi",     # actual lang_obj.name in le-utils
+    "marwari",              # future-proofing for upcoming lang_obj.name changes
+    "assamese",
+    "urdu",
+    "spanish",
+    "chinese",
+    "indonesian",
+    "sci_edu",
+    "science/educational",
+]
 
 # List of multiple languages on its topics
 MULTI_LANGUAGE_TOPIC = ["russian", "french",]
 
-CACHE_VIDEO_LIST = []
+CACHE_SKIP_VIDEO_LIST = []
 
 # This are the estimate total count of arvind gupta toys language contents
 TOTAL_ARVIND_LANG = 23
@@ -50,10 +64,16 @@ SINGLE_TOPIC = "single"
 STANDARD_TOPIC = "standard"
 MULTI_LANGUAGE = "multi"
 
+YOUTUBE_DOMAINS = ["youtu.be", "youtube.com"]
+
+CLEAR_SKIP_CACHE = "--clear-skip-cache"
+
+DEBUG_MODE = True  # Print extra debug info durig the chef run (disable in prod)
+
+
 
 def clean_video_title(title, lang_obj):
     # Remove redundant and misleading words in the video title
-    pp = pprint.PrettyPrinter()
     clean_title = title
     try:
 
@@ -76,6 +96,28 @@ def clean_video_title(title, lang_obj):
     return clean_title
 
 
+def load_skip_videos():
+    data = []
+    if not os.path.exists(CACHE_SKIP_VIDEOS_PATH):
+        return data
+    with open(CACHE_SKIP_VIDEOS_PATH) as json_file:
+        try:
+            data = json.load(json_file)
+            if type(data) == type([]) :
+                return data
+        except Exception as e:
+            print("Error failed to load cache video", e)
+    return data          
+
+
+def cache_skip_videos():
+    global CACHE_SKIP_VIDEO_LIST
+    skip_videos = load_skip_videos()
+    with open(CACHE_SKIP_VIDEOS_PATH, 'w') as outfile:
+        data = CACHE_SKIP_VIDEO_LIST + skip_videos
+        json.dump(data, outfile)
+
+
 def include_video_topic(topic_node, video_data, lang_obj):
     # Include video details to the parent topic node
     video_id = video_data.uid
@@ -90,7 +132,8 @@ def include_video_topic(topic_node, video_data, lang_obj):
         files=[
             YouTubeVideoFile(
                 youtube_id=video_id,
-                language=video_data.language
+                language=video_data.language,
+                high_resolution=False,
             )
         ])
     topic_node.add_child(video_node)
@@ -106,35 +149,12 @@ def save_skip_videos(video, topic, lang_obj):
     text_file.close()
 
 
-def load_skip_videos():
-    data = []
-    if not os.path.exists(CACHE_VIDEOS_PATH):
-        return data
-    with open(CACHE_VIDEOS_PATH) as json_file:
-        try:
-            data = json.load(json_file)
-            if type(data) == type([]) :
-                return data
-        except:
-            print("Failed to load cache video list")
-    return data          
-
-
-def cache_skip_videos():
-    global CACHE_VIDEO_LIST
-    skip_videos = load_skip_videos()
-    with open(CACHE_VIDEOS_PATH, 'w') as outfile:
-        data = CACHE_VIDEO_LIST + skip_videos
-        json.dump(data, outfile)
-
-
 def download_video_topics(data, topic, topic_node, lang_obj):
     """
     Scrape, collect, and download the videos and their thumbnails.
     """
-    global CACHE_VIDEO_LIST
-    pp = pprint.PrettyPrinter()
-
+    global CACHE_SKIP_VIDEO_LIST
+    video_source_ids = []
     for vinfo in data[topic]:
         try:
             video_url = vinfo['video_url']
@@ -147,17 +167,21 @@ def download_video_topics(data, topic, topic_node, lang_obj):
             if match:
                 youtube_id = match.group('youtube_id')
                 skip_videos = load_skip_videos()
-                if youtube_id in skip_videos:
-                    return
-                if video.download_info():
-                    if video.license_common:
-                        include_video_topic(topic_node, video, lang_obj)
+                if not youtube_id in skip_videos: 
+                    if video.download_info():
+                        if video.license_common:
+                            video_source_id = 'arvind-video-{0}'.format(video.uid)
+                            if video_source_id not in video_source_ids:
+                                include_video_topic(topic_node, video, lang_obj)
+                                video_source_ids.append(video_source_id)
+                            else:
+                                print('Skipping duplicate video: ' + str(vinfo['video_url']))
+                        else:
+                            save_skip_videos(video, topic, lang_obj)
+                            CACHE_SKIP_VIDEO_LIST.append(video.uid)
                     else:
                         save_skip_videos(video, topic, lang_obj)
-                        CACHE_VIDEO_LIST.append(video.uid)
-                else:
-                    save_skip_videos(video, topic, lang_obj)
-                    CACHE_VIDEO_LIST.append(video.uid)
+                        CACHE_SKIP_VIDEO_LIST.append(video.uid)
 
         except Exception as e:
             print('Error downloading this video:', e)
@@ -165,7 +189,6 @@ def download_video_topics(data, topic, topic_node, lang_obj):
 
 def generate_child_topics(arvind_contents, main_topic, lang_obj, topic_type):
     # Create a topic for each languages
-    pp = pprint.PrettyPrinter()
     data = arvind_contents[lang_obj.name]
 
     for topic_index in data:
@@ -182,6 +205,9 @@ def generate_child_topics(arvind_contents, main_topic, lang_obj, topic_type):
 
 
 def create_language_data(lang_data, lang_obj):
+    """
+    Process the list of elements in `lang_data` to extract video links.
+    """
     topic_contents = {}
     initial_topics = []
     prev_topic = ""
@@ -191,16 +217,23 @@ def create_language_data(lang_data, lang_obj):
     lang_name = lang_obj.name.lower() 
     for item in lang_data:
         total_loop -= 1
+
+        if isinstance(item, NavigableString) or item.name == 'br':
+            continue  # skip whitespace and <br/> tags
+
         try:
             title = item.text.rstrip().strip()
             video_link = ""
             try:
-                video_link = item.a.get("href")
-                topic_details = {}
-                ytd_domain = "youtube.com"
+                video_a_tag = item.find('a')
+                if video_a_tag:
+                    video_link = video_a_tag.get("href")    # for videos
+                else:
+                    video_link = ""                         # for headings
 
-                if ytd_domain in video_link:
-                    download_path = DOWNLOADS_VIDEOS_PATH + lang_name
+                topic_details = {}
+
+                if any(ytd in video_link for ytd in YOUTUBE_DOMAINS):
 
                     if lang_name in MULTI_LANGUAGE_TOPIC:
                         current_lang = title.split()[0].lower()
@@ -208,10 +241,9 @@ def create_language_data(lang_data, lang_obj):
                         if first_count == 1:
                             first_count = 0
                             prev_topic = current_lang
-                        download_path = DOWNLOADS_VIDEOS_PATH + prev_topic
+
                     topic_details['video_url'] = video_link
                     topic_details['video_title'] = title
-                    topic_details['download_path'] = download_path
                     
                     if lang_name in MULTI_LANGUAGE_TOPIC:
 
@@ -220,7 +252,9 @@ def create_language_data(lang_data, lang_obj):
                             initial_topics = []
                             prev_topic = current_lang
                     initial_topics.append(topic_details)
-            except:
+
+            except Exception as e:
+                print('>> passing on', e)
                 pass
 
             if first_count == 1:
@@ -235,11 +269,15 @@ def create_language_data(lang_data, lang_obj):
                     topic_contents[prev_topic] = initial_topics
                     prev_topic = title.replace(":", "").strip()
                     initial_topics = []
-        except:
+        except Exception as e:
+            print('>>> passing on', e)
             pass
-
-        if total_loop == 0:
-            topic_contents[prev_topic] = initial_topics
+    
+    # This wasn't working (last topic in each standard language was missing) ...
+    #       if total_loop == 0:
+    #           topic_contents[prev_topic] = initial_topics
+    # ... so changed to this:
+    topic_contents[prev_topic] = initial_topics
     return topic_contents
 
 
@@ -262,49 +300,49 @@ def get_language_details(lang_name):
 
 def create_language_topic():
     arvind_languages = scrape_arvind_page()
-    pp = pprint.PrettyPrinter()
     main_topic_list = []
 
     if os.path.exists(SKIP_VIDEOS_PATH):
         os.remove(SKIP_VIDEOS_PATH)
     loop_max = TOTAL_ARVIND_LANG
     language_next_int = 7
-    lang_limit = 0
     loop_couter = 0
     while (loop_couter != loop_max):
         try:
             lang_name = arvind_languages[language_next_int].get('id')
-            # Increase the language_next_int to get the next language contents
             lang_obj = get_language_details(lang_name.lower())
 
             if lang_obj != None:
                 lang_name = lang_obj.name
                 lang_name_lower = lang_name.lower()
+                print('== Processing ', lang_name, '='*60)
                 language_source_id = 'arvind-parent-topic-{0}'.format(lang_name_lower)
+                # print('language_source_id =', language_source_id)
                 get_language_data = list(arvind_languages[language_next_int])
+                # print('len(get_language_data) = ', len(get_language_data))
                 data_contents = { lang_name: create_language_data(get_language_data, lang_obj) }
+                # print('len(data_contents[lang_name])', len(data_contents[lang_name]))
                 language_topic = TopicNode(title=lang_name.capitalize(), source_id=language_source_id)
 
-                if lang_name_lower not in SINGLE_TOPIC_LANGUAGES and lang_name_lower not in MULTI_LANGUAGE_TOPIC:
-                    print("=======> This Language is in standard format", lang_name)
-                    topic_type = STANDARD_TOPIC
-                    generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
-                    main_topic_list.append(language_topic)
-                    print("=====>finished", lang_name)
+                # if lang_name_lower not in SINGLE_TOPIC_LANGUAGES and lang_name_lower not in MULTI_LANGUAGE_TOPIC:
+                #     print("=======> This Language is in standard format", lang_name)
+                #     topic_type = STANDARD_TOPIC
+                #     generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
+                #     main_topic_list.append(language_topic)
+                #     print("=====>finished", lang_name)
 
-                if lang_name_lower in SINGLE_TOPIC_LANGUAGES:
-                    print("=====> This Language is in single topic format ", lang_name)
-                    topic_type = SINGLE_TOPIC
-                    generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
-                    main_topic_list.append(language_topic)
-                    print("=====>finished", lang_name)
+                # if lang_name_lower in SINGLE_TOPIC_LANGUAGES:
+                #     print("=====> This Language is in single topic format ", lang_name)
+                #     topic_type = SINGLE_TOPIC
+                #     generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
+                #     main_topic_list.append(language_topic)
+                #     print("=====>finished", lang_name)
 
                 if lang_name_lower in MULTI_LANGUAGE_TOPIC:
                     print("=====> This Language is in multiple langauage topic format ", lang_name)
                     lang_data = create_language_data(get_language_data, lang_obj)
                     for lang in lang_data:
                         current_lang = get_language_details(lang.lower())
-
                         if current_lang != None:
                             parent_source_id = 'arvind-parent-topic-{0}'.format(current_lang.name)
                             parent_topic = TopicNode(title=lang.capitalize(), source_id=parent_source_id)
@@ -316,24 +354,23 @@ def create_language_topic():
 
         except Exception as e:
             print("===> error getting language topics: ", e)
+            # raise(e)
+
         language_next_int += 4
         loop_couter += 1
+
     cache_skip_videos()
-    # pp.pprint(data_contents)
     return main_topic_list
 
 
 class ArvindChef(SushiChef):
     channel_info = {
         "CHANNEL_TITLE": "Arvind Gupta Toys",
-        # where you got the content (change me!!)
         "CHANNEL_SOURCE_DOMAIN": "arvindguptatoys.com",
-        # channel's unique id (change me!!) # NOTE when you remove test- the channel_id will change; make sure to update notion card
-        "CHANNEL_SOURCE_ID": "arvind-gupta-toys-beta",
-        "CHANNEL_LANGUAGE": "mul",  # le_utils language code
+        "CHANNEL_SOURCE_ID": "toys-from-trash",
+        "CHANNEL_LANGUAGE": "mul",
         "CHANNEL_THUMBNAIL": 'chefdata/arvind_gupta_thumbnail.png',
-        # (optional)
-        "CHANNEL_DESCRIPTION": "Math and Science activities through low-cost " \
+        "CHANNEL_DESCRIPTION": "Math and science activities through low-cost " \
                 "materials all in the form of videos to provide various pathways for children to explore" \
                 " and deepen their understanding of concepts in low-resource contexts around the world." \
                 " Valuable resource library for teachers to incorporate in their lessons, for parents to" \
@@ -359,11 +396,20 @@ class ArvindChef(SushiChef):
         return channel
 
 
+def check_arg():
+    """Remove cache skip videos if CLEAR_SKIP_CACHE in argv"""
+    args_val = sys.argv
+    if CLEAR_SKIP_CACHE in args_val:
+        args_val.remove(CLEAR_SKIP_CACHE)
+        if os.path.exists(CACHE_SKIP_VIDEOS_PATH):
+            os.remove(CACHE_SKIP_VIDEOS_PATH)
+
+
 if __name__ == "__main__":
     """
     Run this script on the command line using:
         python sushichef.py -v --reset --token=YOURTOKENHERE9139139f3a23232
     """
-    
+    check_arg()
     chef = ArvindChef()
     chef.main()
