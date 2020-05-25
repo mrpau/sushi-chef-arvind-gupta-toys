@@ -66,6 +66,7 @@ MULTI_LANGUAGE = "multi"
 
 YOUTUBE_DOMAINS = ["youtu.be", "youtube.com"]
 
+# Include this at script argv to delete CACHE_SKIP_VIDEOS_PATH
 CLEAR_SKIP_CACHE = "--clear-skip-cache"
 
 DEBUG_MODE = True  # Print extra debug info durig the chef run (disable in prod)
@@ -324,19 +325,19 @@ def create_language_topic():
                 # print('len(data_contents[lang_name])', len(data_contents[lang_name]))
                 language_topic = TopicNode(title=lang_name.capitalize(), source_id=language_source_id)
 
-                # if lang_name_lower not in SINGLE_TOPIC_LANGUAGES and lang_name_lower not in MULTI_LANGUAGE_TOPIC:
-                #     print("=======> This Language is in standard format", lang_name)
-                #     topic_type = STANDARD_TOPIC
-                #     generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
-                #     main_topic_list.append(language_topic)
-                #     print("=====>finished", lang_name)
+                if lang_name_lower not in SINGLE_TOPIC_LANGUAGES and lang_name_lower not in MULTI_LANGUAGE_TOPIC:
+                    print("=======> This Language is in standard format", lang_name)
+                    topic_type = STANDARD_TOPIC
+                    generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
+                    main_topic_list.append(language_topic)
+                    print("=====>finished", lang_name)
 
-                # if lang_name_lower in SINGLE_TOPIC_LANGUAGES:
-                #     print("=====> This Language is in single topic format ", lang_name)
-                #     topic_type = SINGLE_TOPIC
-                #     generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
-                #     main_topic_list.append(language_topic)
-                #     print("=====>finished", lang_name)
+                if lang_name_lower in SINGLE_TOPIC_LANGUAGES:
+                    print("=====> This Language is in single topic format ", lang_name)
+                    topic_type = SINGLE_TOPIC
+                    generate_child_topics(data_contents, language_topic, lang_obj, topic_type)
+                    main_topic_list.append(language_topic)
+                    print("=====>finished", lang_name)
 
                 if lang_name_lower in MULTI_LANGUAGE_TOPIC:
                     print("=====> This Language is in multiple langauage topic format ", lang_name)
